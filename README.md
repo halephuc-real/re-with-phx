@@ -11,7 +11,7 @@ It includes native, managed, web, firmware, and runtime analysis tools.
 - Upgraded `reverse-engineer-anything` skill with full source reconstruction,
   call-stack backtrace, parameter mapping, VTable mapping, offset mapping,
   internal-call testing, patcher workflow, and protection-check analysis
-- Windows native helper restored for owned-process control
+- Windows native helper source and reproducible build instructions
 - Cleaned runtime-focused repository layout
 
 ## Quick start
@@ -20,6 +20,7 @@ It includes native, managed, web, firmware, and runtime analysis tools.
 git clone https://github.com/halephuc-real/re-with-phx.git
 cd re-with-phx
 npm ci
+npm run build:windows-native  # requires Linux and MinGW-w64
 npm run build:cached
 ```
 
@@ -88,7 +89,7 @@ npm run artifacts:skills
 - The local MCP server name and tool namespace are `phxre`.
 - The `phxre` command alias is available through `npm link` or `npx` when the
   package is installed locally.
-- Native Windows helper files are included under `native/windows/build`.
+- Native Windows build output is generated locally; see `native/windows/README.md`.
 
 ## License
 
