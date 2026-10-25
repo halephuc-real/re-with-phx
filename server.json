@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.halephuc-real/phxre",
+  "title": "PhxRE",
+  "description": "Reverse engineer software with PhxRE from your terminal or agent.",
+  "websiteUrl": "https://github.com/halephuc-real/re-with-phx",
+  "repository": {
+    "url": "https://github.com/halephuc-real/re-with-phx",
+    "source": "github"
+  },
+  "version": "1.0.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "phx-re",
+      "version": "1.0.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

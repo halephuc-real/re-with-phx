@@ -1,0 +1,221 @@
+import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
+import { randomUUID } from "node:crypto";
+import { access, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { isAbsolute } from "node:path";
+import { AnalysisCapabilityUnavailableError, AnalysisOutputError, } from "../domain/analysisErrorCore.js";
+import { ProviderAdapterError } from "../domain/providerAdapterError.js";
+import { ProviderCleanupError } from "../domain/providerCleanupError.js";
+import { projectAnalysisErrorWithoutCapturedOutput } from "../domain/analysisErrorProjection.js";
+import { firmwareFailure, firmwareCancellation, firmwarePhaseInterruption, } from "./FirmwareFailures.js";
+import { spawnOwnedProviderProcess, ProviderProcessSupervisor, } from "../process/ProviderProcess.js";
+import { cleanupOwnedProcessGroup } from "../process/ProcessOwnership.js";
+import { FIRMWARE_LIMITS } from "./FirmwareRelease.js";
+import { inventoryFirmwareOutput, } from "./FirmwareFiles.js";
+/** Refuse an unmet host or tool requirement, which another target cannot satisfy. */
+export const firmwareToolUnavailable = (engine, operation, reason) => new AnalysisCapabilityUnavailableError(engine, operation, reason, {
+    userMessage: reason,
+});
+/** Resolve explicitly supplied executable paths; never install or search for engines. */
+export const resolveFirmwareCommand = async (environment, engine, operation, files, signal) => {
+    const variable = engine === "binwalk" ? "PHXRE_BINWALK_COMMAND" : "PHXRE_UNBLOB_COMMAND";
+    const configured = environment[variable];
+    if (process.platform !== "linux" ||
+        configured === undefined ||
+        !isAbsolute(configured))
+        throw firmwareToolUnavailable(engine, operation, `This integration requires Linux and an absolute ${variable} path to the caller-supplied tool`);
+    const command = await realpath(configured).catch((cause) => {
+        throw firmwareToolUnavailable(engine, operation, `${variable} is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    });
+    let sha256;
+    try {
+        await access(command, constants.R_OK | constants.X_OK);
+        if (!(await stat(command)).isFile())
+            throw new TypeError("Configured path is not a regular file");
+        sha256 = await files.hash(command, signal);
+    }
+    catch (cause) {
+        if (cause instanceof ArtifactReaderFailure)
+            throw cause;
+        throw firmwareToolUnavailable(engine, operation, `${variable} is not a readable executable regular file: ${command}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    const limiter = environment.PHXRE_FIRMWARE_PRLIMIT_COMMAND ?? "/usr/bin/prlimit";
+    if (!isAbsolute(limiter))
+        throw firmwareToolUnavailable(engine, operation, "PHXRE_FIRMWARE_PRLIMIT_COMMAND must be absolute");
+    try {
+        await access(limiter, constants.X_OK);
+        if (!(await stat(limiter)).isFile())
+            throw new TypeError("Configured path is not a regular file");
+    }
+    catch (cause) {
+        throw firmwareToolUnavailable(engine, operation, `Resource limiter is not an executable regular file: ${limiter}: ${cause instanceof Error ? cause.message : String(cause)}; provide util-linux prlimit`);
+    }
+    return { command, limiter, sha256 };
+};
+/** Execute one bounded provider command and verify its owned descendants have stopped. */
+export const runFirmwareCommand = async (context) => {
+    const { engine, operation, signal } = context;
+    const checkInterruption = () => {
+        const failure = firmwarePhaseInterruption(operation, signal, context.deadline);
+        if (failure !== undefined)
+            throw failure;
+    };
+    checkInterruption();
+    const runId = `phxre-firmware-${randomUUID()}`;
+    const spawned = await (context.launcher ?? spawnOwnedProviderProcess)({
+        command: context.limiter,
+        arguments: [
+            `--as=${FIRMWARE_LIMITS.addressSpaceBytes}`,
+            `--fsize=${context.outputBudget?.bytes ?? FIRMWARE_LIMITS.reportBytes}`,
+            "--core=0",
+            `--cpu=${FIRMWARE_LIMITS.cpuSeconds}`,
+            "--",
+            context.command,
+            ...context.args,
+        ],
+        expectedCommand: null,
+        runId,
+        cwd: context.cwd,
+        hostEnvironment: context.environment,
+        signal,
+        env: {
+            TMPDIR: context.cwd,
+            OMP_NUM_THREADS: "1",
+            OPENBLAS_NUM_THREADS: "1",
+            RAYON_NUM_THREADS: "1",
+            NO_COLOR: "1",
+        },
+    }).catch((cause) => {
+        // Owned admission can reject before a supervisor/child exists. Attribute
+        // only this signal's raw reason or a linked Node AbortError, never an
+        // unrelated failure merely because a timer also fired.
+        if (signal.aborted &&
+            (cause === signal.reason ||
+                (cause instanceof Error &&
+                    cause.name === "AbortError" &&
+                    cause.cause === signal.reason)))
+            throw firmwareCancellation(operation, signal.reason, context.deadline);
+        throw cause;
+    });
+    let diagnosticTruncated = false;
+    const supervisor = new ProviderProcessSupervisor({
+        ...spawned,
+        ownsProcessLifetime: true,
+        cleanup: spawned.cleanup ?? (() => cleanupOwnedProcessGroup(spawned.ownership)),
+    }, {
+        maxDiagnosticBytes: FIRMWARE_LIMITS.diagnosticBytes,
+        onDiagnostic: (event) => {
+            if (event.type === "output" && event.truncated === true)
+                diagnosticTruncated = true;
+        },
+    });
+    const checkDiagnostics = () => {
+        if (diagnosticTruncated) {
+            const snapshot = supervisor.snapshot();
+            throw new AnalysisOutputError(operation, `Tool diagnostics exceeded the ${FIRMWARE_LIMITS.diagnosticBytes}-byte capture budget`, {
+                capturedOutput: {
+                    stdout: snapshot.stdout.text,
+                    stderr: snapshot.stderr.text,
+                    truncated: true,
+                },
+            });
+        }
+    };
+    let failure;
+    try {
+        while (!(await supervisor.waitForOutputClose(100))) {
+            checkDiagnostics();
+            checkInterruption();
+            if (context.outputBudget !== undefined)
+                await inventoryFirmwareOutput(context.outputBudget.root, context.outputBudget.bytes, context.outputBudget.entries, operation, signal);
+        }
+        checkDiagnostics();
+        checkInterruption();
+    }
+    catch (cause) {
+        failure = firmwareFailure(cause, context);
+    }
+    const stopped = await supervisor.stop();
+    // Cleanup is an awaited part of this phase. Preserve a prior observed failure,
+    // otherwise retain an interruption that arrived while stopping owned resources.
+    failure ??= firmwarePhaseInterruption(operation, signal, context.deadline);
+    const snapshot = supervisor.snapshot();
+    if (stopped.status === "incomplete") {
+        context.retainCleanup(supervisor);
+        const previous = failure === undefined
+            ? undefined
+            : projectAnalysisErrorWithoutCapturedOutput(failure);
+        // Retain typed recovery history, but give captured output exactly one owner.
+        throw new ProviderCleanupError(engine, [runId, context.cwd], {
+            reason: stopped.reason,
+            leader_pid: spawned.ownership.leaderPid,
+            process_group_id: spawned.ownership.processGroupId,
+            previous_error: previous ?? null,
+        }, {
+            operation,
+            cleanupPrimary: failure,
+            capturedOutput: {
+                stdout: snapshot.stdout.text,
+                stderr: snapshot.stderr.text,
+                stdout_bytes: snapshot.stdout.bytes,
+                stderr_bytes: snapshot.stderr.bytes,
+                exit_code: snapshot.exitCode ?? null,
+                signal: snapshot.signal ?? null,
+                truncated: snapshot.diagnosticTruncated === true,
+            },
+        });
+    }
+    if (failure !== undefined)
+        throw failure;
+    if (snapshot.exitCode !== 0 &&
+        !(context.acceptReportedExtractionFailure === true &&
+            snapshot.exitCode === 1))
+        throw new ProviderAdapterError(engine, operation, {
+            diagnostics: {
+                reason: "Tool failed; inspect exit status and stderr for format, dependency, sandbox or resource-limit failures",
+                exit_code: snapshot.exitCode ?? null,
+                signal: snapshot.signal ?? null,
+                stdout: snapshot.stdout.text,
+                stderr: snapshot.stderr.text,
+                stdout_bytes: snapshot.stdout.bytes,
+                stderr_bytes: snapshot.stderr.bytes,
+            },
+        });
+    return {
+        stdout: snapshot.stdout,
+        stderr: snapshot.stderr,
+        exit_code: snapshot.exitCode,
+        signal: snapshot.signal ?? null,
+        command: context.command,
+        args: [...context.args],
+        resource_limiter: context.limiter,
+    };
+};
+/** Preserve tool failure diagnostics when an accepted exit 1 has no usable report. */
+export const readFirmwareCommandReport = async (context) => {
+    try {
+        return await context.files.report(context.path, context.operation, context.signal);
+    }
+    catch (cause) {
+        if (cause instanceof ArtifactReaderFailure)
+            throw cause;
+        if (context.execution.exit_code === 1)
+            throw new ProviderAdapterError(context.engine, context.operation, {
+                cause,
+                diagnostics: {
+                    reason: "Tool exited 1 without a usable analysis report; inspect stderr for startup, sandbox or dependency failures",
+                    report_failure: cause instanceof Error ? cause.message : String(cause),
+                    exit_code: 1,
+                    signal: context.execution.signal,
+                    stdout: context.execution.stdout.text,
+                    stderr: context.execution.stderr.text,
+                    stdout_bytes: context.execution.stdout.bytes,
+                    stderr_bytes: context.execution.stderr.bytes,
+                },
+            });
+        const diagnostics = `stdout (${context.execution.stdout.bytes} bytes): ${context.execution.stdout.text}; stderr (${context.execution.stderr.bytes} bytes): ${context.execution.stderr.text}`;
+        if (cause instanceof AnalysisOutputError)
+            throw new AnalysisOutputError(context.operation, `${cause.reason}; ${diagnostics}`, { cause });
+        throw new AnalysisOutputError(context.operation, `Tool did not produce the expected complete report: ${context.path}; ${diagnostics}`, { cause });
+    }
+};

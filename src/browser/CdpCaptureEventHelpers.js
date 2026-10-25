@@ -1,0 +1,148 @@
+import { isHttpUrl, numberValue, recordValue, recordsValue, cdpStringValue, } from "./CdpCaptureValues.js";
+const nonEmptyString = (value) => typeof value === "string" && value.length > 0 ? value : undefined;
+const identityIssueFor = (navigated, frame, rawId) => {
+    if (navigated && frame === undefined)
+        return "missing_frame";
+    if (rawId === undefined)
+        return "missing_id";
+    return nonEmptyString(rawId) === undefined ? "invalid_id" : null;
+};
+const parentFacts = (navigated, frame) => {
+    if (!navigated)
+        return {
+            parentRelation: "not_applicable",
+            parentId: null,
+            parentIssue: null,
+        };
+    if (frame === undefined)
+        return { parentRelation: "unknown", parentId: null, parentIssue: null };
+    if (!("parentId" in frame))
+        return { parentRelation: "root", parentId: null, parentIssue: null };
+    const parentId = nonEmptyString(frame.parentId);
+    return parentId === undefined || parentId === nonEmptyString(frame.id)
+        ? {
+            parentRelation: "unknown",
+            parentId: null,
+            parentIssue: parentId === undefined ? "invalid_parent_id" : "self_parent",
+        }
+        : { parentRelation: "child", parentId, parentIssue: null };
+};
+/** Parse required frame identity separately from the optional parent fact. */
+export const cdpFrameIdentity = (event, mainFrameId) => {
+    const navigated = event.method === "Page.frameNavigated";
+    const requested = event.method === "Page.frameRequestedNavigation";
+    const sameDocument = event.method === "Page.navigatedWithinDocument";
+    if (!navigated && !requested && !sameDocument)
+        return {
+            applicability: "not_applicable",
+            selection: "unknown",
+            isRootReplacement: false,
+            frameId: null,
+            identityIssue: null,
+            parentRelation: "not_applicable",
+            parentId: null,
+            parentIssue: null,
+        };
+    const params = recordValue(event.params);
+    if (params === undefined)
+        return {
+            applicability: "applicable",
+            selection: "unknown",
+            isRootReplacement: false,
+            frameId: null,
+            identityIssue: event.params === undefined ? "missing_params" : "invalid_params",
+            parentRelation: "not_applicable",
+            parentId: null,
+            parentIssue: null,
+        };
+    const frame = navigated ? recordValue(params.frame) : undefined;
+    const rawId = navigated ? frame?.id : params.frameId;
+    const frameId = nonEmptyString(rawId);
+    const selection = frameId === undefined
+        ? "unknown"
+        : frameId === mainFrameId
+            ? "main"
+            : "other";
+    const identityIssue = identityIssueFor(navigated, frame, rawId);
+    const parent = parentFacts(navigated, frame);
+    return {
+        applicability: "applicable",
+        selection,
+        isRootReplacement: selection === "other" && parent.parentRelation === "root",
+        frameId: frameId ?? null,
+        identityIssue,
+        parentRelation: parent.parentRelation,
+        parentId: parent.parentId,
+        parentIssue: selection === "main" &&
+            (parent.parentRelation === "child" ||
+                parent.parentIssue === "self_parent")
+            ? "main_frame_has_parent"
+            : parent.parentIssue,
+    };
+};
+export const firstCallFrame = (value) => recordsValue(value?.callFrames)[0];
+export const initiatorLocation = (initiator) => {
+    let stack = recordValue(initiator?.stack);
+    for (let depth = 0; depth < 32 && stack !== undefined; depth += 1) {
+        const frame = firstCallFrame(stack);
+        if (frame !== undefined)
+            return frame;
+        stack = recordValue(stack.parent);
+    }
+    return cdpStringValue(initiator?.url) === undefined ? undefined : initiator;
+};
+export const exclusionReasonForUrl = (value) => value === undefined || value === ""
+    ? "unattributed_origin"
+    : isHttpUrl(value)
+        ? "disallowed_origin"
+        : "unsupported_url";
+export const integerOrNull = (value) => {
+    const number = numberValue(value);
+    return number === undefined ? null : Math.max(0, Math.trunc(number));
+};
+export const executionContextKey = (value) => {
+    const identifier = numberValue(value);
+    return identifier !== undefined && Number.isSafeInteger(identifier)
+        ? String(identifier)
+        : null;
+};
+export const isJsonContentType = (headers) => {
+    if (headers === undefined)
+        return false;
+    for (const [name, value] of Object.entries(headers))
+        if (name.toLowerCase() === "content-type" &&
+            isJsonMediaType(cdpStringValue(value)))
+            return true;
+    return false;
+};
+export const isJsonMediaType = (value) => {
+    const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
+    return (mediaType === "application/json" || mediaType?.endsWith("+json") === true);
+};
+export const consolePrimitive = (value) => {
+    const type = cdpStringValue(value.type);
+    switch (type) {
+        case "string":
+            return typeof value.value === "string"
+                ? { type, text: value.value }
+                : undefined;
+        case "boolean":
+            return typeof value.value === "boolean"
+                ? { type, text: String(value.value) }
+                : undefined;
+        case "number":
+            return typeof value.value === "number"
+                ? { type, text: String(value.value) }
+                : typeof value.unserializableValue === "string"
+                    ? { type, text: value.unserializableValue }
+                    : undefined;
+        case "bigint":
+            return typeof value.unserializableValue === "string"
+                ? { type, text: value.unserializableValue }
+                : undefined;
+        case "undefined":
+            return { type, text: "undefined" };
+        default:
+            return undefined;
+    }
+};

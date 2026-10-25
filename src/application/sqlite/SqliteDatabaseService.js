@@ -1,0 +1,81 @@
+import { isAbsolute } from "node:path";
+import { AnalysisCancelledError, AnalysisInputError, AnalysisOutputError, } from "../../domain/analysisErrorCore.js";
+import { createEvidence, } from "../../domain/evidence.js";
+import { inspectSqliteDatabaseInputSchema, sqliteDatabaseSchema, SQLITE_ROW_LIMIT_DEFAULT, DEFAULT_SQLITE_WORKER_TIMEOUT_MS, sqliteSchemaScope, sqliteInspectionParameters, } from "../../domain/sqlite/sqliteDatabase.js";
+import { analysisInputErrorFromIssues } from "../../domain/inputIssueProjection.js";
+import { err, ok } from "../../domain/result.js";
+import { jsonValueSchema } from "../../domain/jsonValue.js";
+const OPERATION = "inspect_sqlite_database";
+const matchesSelectedDatabase = (report, input, subject) => report.artifact.path === input.path &&
+    subject.path === input.path &&
+    subject.sha256 === report.artifact.sha256 &&
+    subject.format === "file" &&
+    // Fresh executions must report known settings; only historical parsing permits omission.
+    report.worker_timeout_ms ===
+        (input.worker_timeout_ms ?? DEFAULT_SQLITE_WORKER_TIMEOUT_MS) &&
+    (report.wal === null || report.wal.path === `${input.path}-wal`) &&
+    report.schema.scope === sqliteSchemaScope(input) &&
+    (report.schema.scope !== "selected_table" ||
+        (report.schema.tables.length === 1 &&
+            report.schema.tables[0]?.name === input.table &&
+            report.schema.indexes.every((index) => index.table === input.table) &&
+            report.schema.triggers.every((trigger) => trigger.table === input.table) &&
+            report.schema.views.length === 0)) &&
+    (input.table === undefined
+        ? report.rows === null
+        : report.rows?.table === input.table &&
+            report.rows.row_limit === (input.row_limit ?? SQLITE_ROW_LIMIT_DEFAULT) &&
+            (input.columns === undefined ||
+                (report.rows.columns.length === input.columns.length &&
+                    report.rows.columns.every((name, index) => name === input.columns?.[index]))));
+/** Shared snapshot inspection and caller-selection validation for CLI and MCP. */
+export class SqliteDatabaseService {
+    provider;
+    constructor(provider) {
+        this.provider = provider;
+    }
+    /** Await provider shutdown, retaining failed cleanup owners for retry. */
+    close() {
+        return this.provider.close?.() ?? Promise.resolve();
+    }
+    /** Inspect an explicit database snapshot and preserve its original database/WAL identity. */
+    async inspect(rawInput, options) {
+        if (options?.signal?.aborted)
+            return err(new AnalysisCancelledError(OPERATION, {
+                cause: options.signal.reason,
+            }));
+        const input = inspectSqliteDatabaseInputSchema.safeParse(rawInput);
+        if (!input.success)
+            return err(analysisInputErrorFromIssues(OPERATION, input.error.issues, rawInput, {
+                cause: input.error,
+            }));
+        if (!isAbsolute(input.data.path))
+            return err(new AnalysisInputError(OPERATION, undefined, [
+                {
+                    path: ["path"],
+                    reason: "invalid_format",
+                    message: "Expected an absolute filesystem path on this host.",
+                },
+            ]));
+        const inspected = await this.provider.inspect(input.data, options);
+        if (!inspected.ok)
+            return inspected;
+        const execution = inspected.value;
+        const report = sqliteDatabaseSchema.safeParse(execution.result);
+        if (!report.success ||
+            execution.subject == null ||
+            !matchesSelectedDatabase(report.data, input.data, execution.subject))
+            return err(new AnalysisOutputError(OPERATION, "SQLite adapter returned malformed data or changed the selected database identity/table/row limit/worker budget."));
+        return ok(createEvidence(execution.subject, execution.provider, {
+            operation: OPERATION,
+            parameters: sqliteInspectionParameters(input.data),
+            result: jsonValueSchema.parse(report.data),
+            ...(execution.rawResult === null
+                ? {}
+                : { rawResult: execution.rawResult }),
+            confidence: "observed",
+            locations: execution.locations,
+            limitations: execution.limitations,
+        }));
+    }
+}

@@ -1,0 +1,135 @@
+import { AnalysisCancelledError, AnalysisCapabilityUnavailableError, AnalysisInputError, AnalysisOutputError, } from "../../domain/analysisErrorCore.js";
+import { ArtifactOperationError } from "../../domain/artifactOperationError.js";
+import { err, ok } from "../../domain/result.js";
+import { javaScriptRuntime } from "../../domain/runtimeVersion.js";
+import { WEB_SOURCE_MAP_LIMITS, } from "../../domain/webSourceLocation.js";
+import { sourceMapCodecInputSchema, sourceMapCodecReplySchema, } from "./SourceMapCodecProtocol.js";
+import { SOURCE_MAP_CODEC_MEMORY_LIMIT_BYTES, SourceMapCleanupFailure, runSourceMapCommand, } from "./SourceMapCommand.js";
+import { ProviderCleanupError } from "../../domain/providerCleanupError.js";
+import { jsonParts } from "../../domain/jsonSerialization.js";
+const OPERATION = "trace_web_source_location";
+/** Integrate the pinned upstream codec through an independently bounded owned process. */
+export class SourceMapDecoder {
+    dependencies;
+    #tail = Promise.resolve();
+    #closing = false;
+    #closePromise;
+    #pendingCleanup;
+    constructor(dependencies = {}) {
+        this.dependencies = dependencies;
+    }
+    /** Return complete point evidence after process and private-root cleanup. */
+    trace(input, options) {
+        if (this.#closing)
+            return Promise.resolve(err(new ProviderCleanupError("source-map-decoder", [], { reason: "Provider is closing" }, { operation: OPERATION })));
+        const operation = this.#tail.then(() => this.#closing
+            ? err(new ProviderCleanupError("source-map-decoder", [], { reason: "Provider is closing" }, { operation: OPERATION }))
+            : this.#trace(input, options));
+        this.#tail = operation.then(() => undefined, () => undefined);
+        return operation;
+    }
+    async #trace(input, options) {
+        const cleanupFailure = await this.#retryCleanup();
+        if (cleanupFailure !== undefined)
+            return err(cleanupFailure);
+        if (options?.signal?.aborted)
+            return err(new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }));
+        const request = sourceMapCodecInputSchema.safeParse({
+            text: input.text,
+            url: input.url,
+            position: input.position,
+        });
+        if (!request.success)
+            return err(new AnalysisInputError(OPERATION, { cause: request.error }));
+        const capacityFailure = () => new ArtifactOperationError(OPERATION, "limit", undefined, `${input.path}: Source-map input exceeds the 4 MiB map or 32 MiB encoded request budget.`);
+        if (Buffer.byteLength(input.text) > WEB_SOURCE_MAP_LIMITS.mapBytes)
+            return err(capacityFailure());
+        const encoded = [];
+        let encodedBytes = 0;
+        for (const part of jsonParts(request.data)) {
+            const bytes = Buffer.byteLength(part);
+            if (bytes > WEB_SOURCE_MAP_LIMITS.outputBytes - encodedBytes)
+                return err(capacityFailure());
+            encoded.push(part);
+            encodedBytes += bytes;
+        }
+        if (options?.signal?.aborted)
+            return err(new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }));
+        const serialized = encoded.join("");
+        const response = await runSourceMapCommand(serialized, input.path, options, this.dependencies);
+        if (!response.ok) {
+            if (response.error instanceof SourceMapCleanupFailure)
+                this.#pendingCleanup = response.error.cleanupOwner;
+            return response;
+        }
+        let value;
+        try {
+            value = JSON.parse(response.value);
+        }
+        catch (cause) {
+            return err(new AnalysisOutputError(OPERATION, `Malformed codec JSON reply: ${cause instanceof Error ? cause.message : String(cause)}`));
+        }
+        const reply = sourceMapCodecReplySchema.safeParse(value);
+        if (!reply.success)
+            return err(new AnalysisOutputError(OPERATION, `Malformed codec reply: ${reply.error.message}`));
+        if (options?.signal?.aborted)
+            return err(new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }));
+        if (reply.data.state === "failure")
+            return codecFailure(input.path, reply.data.reason, reply.data.message);
+        const runtimeFailure = codecRuntimeFailure(reply.data.report.runtime);
+        return runtimeFailure === undefined
+            ? ok(reply.data.report)
+            : err(new AnalysisOutputError(OPERATION, runtimeFailure));
+    }
+    async close() {
+        this.#closing = true;
+        this.#closePromise ??= this.#tail
+            .then(async () => {
+            const failure = await this.#retryCleanup();
+            if (failure !== undefined)
+                throw failure;
+        })
+            .catch((cause) => {
+            this.#closePromise = undefined;
+            throw cause;
+        });
+        return this.#closePromise;
+    }
+    async #retryCleanup() {
+        const pending = this.#pendingCleanup;
+        if (pending === undefined)
+            return undefined;
+        const failure = await pending.close(null);
+        if (failure !== undefined)
+            return failure;
+        this.#pendingCleanup = undefined;
+        return undefined;
+    }
+}
+/**
+ * The codec runs on this process's executable. Only a V8 report carries a heap
+ * limit; a Bun report must name the process limit its launcher enforced.
+ */
+const codecRuntimeFailure = (runtime) => {
+    if (runtime.id !==
+        (javaScriptRuntime(process.versions).id === "bun" ? "bun" : "node-v8"))
+        return `Codec reported runtime ${runtime.id}, not the runtime that launched it.`;
+    if (runtime.id === "node-v8" &&
+        runtime.v8_heap_limit_bytes > 256 * 1024 * 1024)
+        return "Codec reported a V8 heap limit exceeding its independent process budget.";
+    if (runtime.id === "bun" &&
+        runtime.process_memory_limit_bytes !== SOURCE_MAP_CODEC_MEMORY_LIMIT_BYTES)
+        return "Codec reported a process memory limit other than the one its launcher enforced.";
+    return undefined;
+};
+const codecFailure = (path, reason, detail) => err(reason === "limit"
+    ? new ArtifactOperationError(OPERATION, "limit", undefined, `${path}: ${detail}`)
+    : reason === "unsupported"
+        ? new AnalysisCapabilityUnavailableError("source-map-decoder", OPERATION, "unsupported_source_map_profile", { userMessage: `${path}: ${detail}` })
+        : new AnalysisInputError(OPERATION, undefined, [
+            {
+                path: ["source_map", "path"],
+                reason: "invalid_format",
+                message: `${path}: ${detail}`,
+            },
+        ]));
