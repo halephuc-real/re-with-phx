@@ -4,15 +4,13 @@ import {
   STDIO_DEFAULT_MAX_BUFFER_SIZE,
   type McpRequestContext,
 } from "@modelcontextprotocol/server";
-import {
-  RECORDED_MCP_CATALOG_SHA256,
-  type RecordedMcpCatalog,
-} from "../recordedMcpCatalog.js";
+import { RECORDED_MCP_CATALOG_SHA256, type RecordedMcpCatalog } from "../recordedMcpCatalog.js";
 import type { AppConfig } from "../config/types.js";
 import {
   resolveMcpInputSchemaProfile,
   type McpInputSchemaProfile,
 } from "../config/mcpInputSchemaProfile.js";
+import type { McpOutputSchemaProfile } from "../config/mcpOutputSchemaProfile.js";
 import { DeferredEvidenceMcpServer } from "../server/DeferredEvidenceMcpServer.js";
 import { ToolResultDelivery } from "../server/ToolResultDelivery.js";
 import { createLogger } from "../logger.js";
@@ -22,25 +20,23 @@ import { MCP_CONNECTION_LOST, SERVER_START_FAILED } from "./messages.js";
 import { OwnedMcpServers } from "./OwnedMcpServers.js";
 
 /** Verify the build-owned artifact before trusting its exact typed projection. */
-const readCatalog = (profile: McpInputSchemaProfile): RecordedMcpCatalog => {
-  const bytes = readFileSync(
-    new URL(
-      profile === "full" ? "../mcp-catalog-full.json" : "../mcp-catalog.json",
-      import.meta.url,
-    ),
-  );
-  if (
-    createHash("sha256").update(bytes).digest("hex") !==
-    RECORDED_MCP_CATALOG_SHA256?.[profile]
-  )
+const catalogFile = (input: McpInputSchemaProfile, output: McpOutputSchemaProfile): string => {
+  if (output === "full")
+    return input === "full" ? "../mcp-catalog-full.json" : "../mcp-catalog.json";
+  return input === "full" ? "../mcp-catalog-full-off.json" : "../mcp-catalog-off.json";
+};
+
+const readCatalog = (
+  input: McpInputSchemaProfile,
+  output: McpOutputSchemaProfile,
+): RecordedMcpCatalog => {
+  const profile = `${input}-${output}` as const;
+  const bytes = readFileSync(new URL(catalogFile(input, output), import.meta.url));
+  if (createHash("sha256").update(bytes).digest("hex") !== RECORDED_MCP_CATALOG_SHA256?.[profile])
     throw new Error(SERVER_START_FAILED);
   // The digest binds these bytes to the same compiled producer and SDK converter.
   const catalog: unknown = JSON.parse(bytes.toString("utf8"));
-  if (
-    typeof catalog !== "object" ||
-    catalog === null ||
-    Reflect.get(catalog, "version") !== 1
-  )
+  if (typeof catalog !== "object" || catalog === null || Reflect.get(catalog, "version") !== 1)
     throw new Error(SERVER_START_FAILED);
   return catalog as RecordedMcpCatalog;
 };
@@ -69,8 +65,7 @@ const initializeRuntime = async (
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
-    if (failures.length > 0)
-      throw new AggregateError(failures, "MCP startup cleanup failed");
+    if (failures.length > 0) throw new AggregateError(failures, "MCP startup cleanup failed");
   });
   const [{ runEager }, { createServer }] = await Promise.all([
     import("./eagerRuntime.js"),
@@ -112,8 +107,7 @@ const initializeRuntime = async (
     },
     config,
   );
-  if (result !== 0 || shutdown === undefined)
-    throw new Error(SERVER_START_FAILED);
+  if (result !== 0 || shutdown === undefined) throw new Error(SERVER_START_FAILED);
 };
 
 /** Own every SDK-created server, including discarded discovery instances. */
@@ -125,7 +119,8 @@ export const runDeferred = async (
     layer: "server",
   });
   const profile = resolveMcpInputSchemaProfile(config.mcpInputSchemaProfile);
-  let firstCatalog: RecordedMcpCatalog | undefined = readCatalog(profile);
+  const outputProfile = config.mcpOutputSchemaProfile ?? "off";
+  let firstCatalog: RecordedMcpCatalog | undefined = readCatalog(profile, outputProfile);
   const servers = new OwnedMcpServers<DeferredEvidenceMcpServer>();
   let handle: McpServerHandle | undefined;
   let attempt: Promise<void> | undefined;
@@ -155,15 +150,11 @@ export const runDeferred = async (
         );
         // Servers published before the serving handle settles join this owner;
         // closeAll seals further publication before taking its snapshot.
-        const [handles, instances] = await Promise.all([
-          handleResults,
-          servers.closeAll(),
-        ]);
+        const [handles, instances] = await Promise.all([handleResults, servers.closeAll()]);
         const failures = [...handles, ...instances].flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length > 0)
-          throw new AggregateError(failures, "MCP cleanup failed");
+        if (failures.length > 0) throw new AggregateError(failures, "MCP cleanup failed");
         unregister();
       })
       .catch((cause) => {
@@ -173,9 +164,7 @@ export const runDeferred = async (
     return attempt;
   };
   const requestClose = () => {
-    void close().catch((cause) =>
-      reportMcpShutdownFailure(cause, dependencies, serverLogger),
-    );
+    void close().catch((cause) => reportMcpShutdownFailure(cause, dependencies, serverLogger));
   };
   try {
     // Keep cleanup reachable even if serve creates a server and then throws.
@@ -185,25 +174,19 @@ export const runDeferred = async (
       handle = await dependencies.serve(
         (context) => {
           const server = servers.create(() => {
-            const catalog = firstCatalog ?? readCatalog(profile);
+            const catalog = firstCatalog ?? readCatalog(profile, outputProfile);
             firstCatalog = undefined;
             const startedAt = new Date().toISOString();
             const server = new DeferredEvidenceMcpServer(
               catalog,
-              new ToolResultDelivery(
-                config.mcpMaxResponseBytes ?? STDIO_DEFAULT_MAX_BUFFER_SIZE,
-              ),
+              new ToolResultDelivery(config.mcpMaxResponseBytes ?? STDIO_DEFAULT_MAX_BUFFER_SIZE),
               (target) =>
-                initializeRuntime(
-                  target,
-                  dependencies,
-                  context,
-                  config,
-                  startedAt,
-                ).catch((cause) => {
-                  dependencies.setExitCode(1);
-                  throw cause;
-                }),
+                initializeRuntime(target, dependencies, context, config, startedAt).catch(
+                  (cause) => {
+                    dependencies.setExitCode(1);
+                    throw cause;
+                  },
+                ),
             );
             return server;
           });
@@ -233,10 +216,7 @@ export const runDeferred = async (
     try {
       await close();
     } catch (cleanupCause) {
-      throw new AggregateError(
-        [cause, cleanupCause],
-        "MCP startup and cleanup failed",
-      );
+      throw new AggregateError([cause, cleanupCause], "MCP startup and cleanup failed");
     }
     dependencies.writeStderr(`${SERVER_START_FAILED}\n`);
     return 1;

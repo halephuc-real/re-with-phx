@@ -11,7 +11,7 @@ export type McpOutputSchemaProfile = z.infer<
 >;
 
 const profileConstraint =
-  'PHXRE_MCP_OUTPUT_SCHEMA_PROFILE must be "full" (default) or "off". The off profile omits output schemas from tools/list while PhxRE validates every successful result against its canonical tool contract and returns complete structured content.';
+  'PHXRE_MCP_OUTPUT_SCHEMA_PROFILE must be "off" (default) or "full". The off profile omits output schemas from tools/list while PhxRE validates every successful result against its canonical tool contract and returns complete structured content.';
 
 /** Parse the output schema advertisement selection at server composition. */
 export const parseMcpOutputSchemaProfile = (

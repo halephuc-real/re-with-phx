@@ -22,11 +22,12 @@ const [
   read("logger.js"),
   read("contracts/promptContracts.js"),
 ]);
-const recordCatalog = async (profile) => {
+const recordCatalog = async (inputProfile, outputProfile) => {
   // Catalog generation is independent of the host account and user configuration.
   const home = await mkdtemp(join(tmpdir(), "phxre-mcp-catalog-"));
   const environment = {
-    PHXRE_MCP_INPUT_SCHEMA_PROFILE: profile,
+    PHXRE_MCP_INPUT_SCHEMA_PROFILE: inputProfile,
+    PHXRE_MCP_OUTPUT_SCHEMA_PROFILE: outputProfile,
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, "config"),
@@ -38,11 +39,7 @@ const recordCatalog = async (profile) => {
   try {
     const config = parseConfig(environment);
     if (!config.ok) throw config.error;
-    const session = createBinarySession(
-      config.value,
-      silentLogger,
-      environment,
-    );
+    const session = createBinarySession(config.value, silentLogger, environment);
     cleanup.push(async () => {
       const closed = await session.close({ retainProviderDocuments: true });
       if (!closed.ok) throw closed.error;
@@ -51,17 +48,13 @@ const recordCatalog = async (profile) => {
     cleanup.push(() => server.close());
     const client = new Client({ name: "phxre-catalog-recorder", version: "1" });
     cleanup.push(() => client.close());
-    const [clientTransport, serverTransport] =
-      InMemoryTransport.createLinkedPair();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     const tools = (await client.listTools()).tools;
     const prompts = (await client.listPrompts()).prompts.map((prompt) => {
-      const contract = PROMPT_CONTRACTS.find(
-        (candidate) => candidate.name === prompt.name,
-      );
-      if (contract === undefined)
-        throw new Error(`Missing prompt ${prompt.name}`);
+      const contract = PROMPT_CONTRACTS.find((candidate) => candidate.name === prompt.name);
+      if (contract === undefined) throw new Error(`Missing prompt ${prompt.name}`);
       return { ...prompt, parameters: contract.arguments };
     });
     const catalog = {
@@ -78,7 +71,13 @@ const recordCatalog = async (profile) => {
     await writeFile(
       join(
         compiled,
-        profile === "full" ? "mcp-catalog-full.json" : "mcp-catalog.json",
+        outputProfile === "full"
+          ? inputProfile === "full"
+            ? "mcp-catalog-full.json"
+            : "mcp-catalog.json"
+          : inputProfile === "full"
+            ? "mcp-catalog-full-off.json"
+            : "mcp-catalog-off.json",
       ),
       encoded,
     );
@@ -102,17 +101,16 @@ const recordCatalog = async (profile) => {
     }
     if (failures.length > 0)
       throw new AggregateError(
-        producerFailure === undefined
-          ? failures
-          : [producerFailure.cause, ...failures],
+        producerFailure === undefined ? failures : [producerFailure.cause, ...failures],
         `Catalog cleanup failed; temporary home retained at ${home}`,
       );
   }
 };
 
 const digests = {};
-for (const profile of ["compact", "full"])
-  digests[profile] = await recordCatalog(profile);
+for (const inputProfile of ["compact", "full"])
+  for (const outputProfile of ["off", "full"])
+    digests[`${inputProfile}-${outputProfile}`] = await recordCatalog(inputProfile, outputProfile);
 await writeFile(
   join(compiled, "recordedMcpCatalog.js"),
   `/** Recorded from the compiled runtime; do not edit. */\nexport const RECORDED_MCP_CATALOG_SHA256 = ${JSON.stringify(digests)};\n`,

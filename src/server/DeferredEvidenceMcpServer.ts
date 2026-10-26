@@ -40,6 +40,9 @@ const recordedProjection = (
   },
 });
 
+const catalogOmitsOutputSchemas = (catalog: RecordedMcpCatalog): boolean =>
+  catalog.tools.every((tool) => tool.outputSchema === undefined);
+
 /** One SDK server, with async canonical validation installed on first use. */
 export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
   private readonly tools = new Map<string, DeferredTool>();
@@ -49,6 +52,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
   private closeAttempt: Promise<void> | undefined;
   private protocolClosed = false;
   private runtimeClosed = false;
+  private readonly catalogOmitsOutputSchemas: boolean;
   private runtimeCleanup: (() => Promise<void>) | undefined;
   private partialClose: (() => Promise<void>) | undefined;
   private materializing = false;
@@ -57,9 +61,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
   constructor(
     catalog: RecordedMcpCatalog,
     delivery: ToolResultDelivery,
-    private readonly initialize: (
-      server: DeferredEvidenceMcpServer,
-    ) => Promise<void>,
+    private readonly initialize: (server: DeferredEvidenceMcpServer) => Promise<void>,
   ) {
     super(
       catalog.info,
@@ -70,9 +72,10 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
       undefined,
       delivery,
       undefined,
-      false,
+      catalogOmitsOutputSchemas(catalog),
       catalog.identity,
     );
+    this.catalogOmitsOutputSchemas = catalogOmitsOutputSchemas(catalog);
     for (const tool of catalog.tools) {
       const { name, inputSchema, outputSchema, ...metadata } = tool;
       let binding: DeferredTool;
@@ -120,8 +123,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
         (async (args, ctx) => {
           await this.ensureRuntime();
           ctx.mcpReq.signal.throwIfAborted();
-          if (binding.callback === undefined)
-            throw new Error(SERVER_START_FAILED);
+          if (binding.callback === undefined) throw new Error(SERVER_START_FAILED);
           return binding.callback(args, ctx);
         }) as InputCallback,
       );
@@ -130,24 +132,18 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
     }
     const completion = {
       complete: async (
-        ...args: Parameters<
-          NonNullable<typeof this.promptCompletion>["complete"]
-        >
+        ...args: Parameters<NonNullable<typeof this.promptCompletion>["complete"]>
       ) => {
         await this.ensureRuntime();
         currentMcpRequestSignal()?.throwIfAborted();
-        if (this.promptCompletion === undefined)
-          throw new Error(SERVER_START_FAILED);
+        if (this.promptCompletion === undefined) throw new Error(SERVER_START_FAILED);
         return this.promptCompletion.complete(...args);
       },
     };
     for (const prompt of catalog.prompts) {
       const { name, parameters, title, description } = prompt;
       let binding: DeferredPrompt;
-      const argsSchema = promptArgumentsSchema(
-        { arguments: parameters },
-        completion,
-      );
+      const argsSchema = promptArgumentsSchema({ arguments: parameters }, completion);
       const registered = super.registerCanonicalPrompt(
         name,
         {
@@ -158,8 +154,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
         async (args, ctx) => {
           await this.ensureRuntime();
           ctx.mcpReq.signal.throwIfAborted();
-          if (binding.callback === undefined)
-            throw new Error(SERVER_START_FAILED);
+          if (binding.callback === undefined) throw new Error(SERVER_START_FAILED);
           return binding.callback(args, ctx);
         },
       );
@@ -169,8 +164,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
   }
 
   ensureRuntime(): Promise<void> {
-    if (this.closing)
-      return Promise.reject(new Error("MCP connection is closed"));
+    if (this.closing) return Promise.reject(new Error("MCP connection is closed"));
     this.loading ??= Promise.resolve()
       .then(() => this.initialize(this))
       .catch(() => {
@@ -214,7 +208,10 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
       !this.materializing ||
       binding === undefined ||
       config.inputSchema === undefined ||
-      (config.outputSchema === undefined) !== (binding.output === undefined)
+      (binding.output !== undefined && config.outputSchema === undefined) ||
+      (binding.output === undefined &&
+        config.outputSchema !== undefined &&
+        !this.catalogOmitsOutputSchemas)
     )
       throw new Error("Unexpected MCP runtime registration");
     const canonical = callback as InputCallback;
@@ -226,16 +223,20 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
     };
     binding.callback = guarded;
     const { inputSchema: _input, outputSchema: _output, ...metadata } = config;
+    const outputProjection =
+      binding.output ??
+      (config.outputSchema === undefined
+        ? undefined
+        : (config.outputSchema["~standard"].jsonSchema.output({
+            target: "draft-2020-12",
+          }) as Record<string, unknown>));
     binding.registered.update({
       ...metadata,
       paramsSchema: recordedProjection(config.inputSchema, binding.input),
-      ...(config.outputSchema === undefined || binding.output === undefined
+      ...(config.outputSchema === undefined || outputProjection === undefined
         ? {}
         : {
-            outputSchema: recordedProjection(
-              config.outputSchema,
-              binding.output,
-            ),
+            outputSchema: recordedProjection(config.outputSchema, outputProjection),
           }),
       callback: guarded,
     });
@@ -266,9 +267,7 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
     return binding.registered;
   }
 
-  override bindPromptCompletion(
-    completion: PromptCompletionSource,
-  ): PromptCompletionSource {
+  override bindPromptCompletion(completion: PromptCompletionSource): PromptCompletionSource {
     return super.bindPromptCompletion({
       complete: async (...args) => {
         await this.ensureRuntime();
@@ -315,7 +314,6 @@ export class DeferredEvidenceMcpServer extends EvidenceMcpServerCore {
         errors.push(cause);
       }
     }
-    if (errors.length > 0)
-      throw new AggregateError(errors, "MCP runtime cleanup failed");
+    if (errors.length > 0) throw new AggregateError(errors, "MCP runtime cleanup failed");
   }
 }

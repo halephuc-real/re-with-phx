@@ -7,6 +7,9 @@ import type {
 import type { createCatalogIdentity } from "./catalogIdentity.js";
 import type { PromptArgumentContract } from "./contracts/promptContracts.js";
 import type { McpInputSchemaProfile } from "./config/mcpInputSchemaProfile.js";
+import type { McpOutputSchemaProfile } from "./config/mcpOutputSchemaProfile.js";
+
+export type RecordedMcpCatalogProfile = `${McpInputSchemaProfile}-${McpOutputSchemaProfile}`;
 
 /** Build-owned discovery data; canonical validators remain the runtime authority. */
 export interface RecordedMcpCatalog {
@@ -23,5 +26,5 @@ export interface RecordedMcpCatalog {
 
 /** Replaced after compilation by the recorder; source runs use eager composition. */
 export const RECORDED_MCP_CATALOG_SHA256:
-  | Readonly<Record<McpInputSchemaProfile, string>>
+  | Readonly<Record<RecordedMcpCatalogProfile, string>>
   | undefined = undefined;

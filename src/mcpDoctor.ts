@@ -572,7 +572,7 @@ const catalogIdentityForEnvironment = (
     compactPresentationForMcpInputSchemaProfile(
       inputProfile.ok ? inputProfile.value : undefined,
     ),
-    outputProfile.ok ? (outputProfile.value ?? "full") : "full",
+    outputProfile.ok ? (outputProfile.value ?? "off") : "off",
   );
 };
 

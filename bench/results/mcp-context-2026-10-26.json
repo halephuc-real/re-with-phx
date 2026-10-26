@@ -1,0 +1,43 @@
+{
+  "benchmark": "PhxRE MCP tools/list catalog microbenchmark",
+  "node": "v24.20.0",
+  "platform": "win32-x64",
+  "timestamp": "2026-10-26T13:24:30.743Z",
+  "caveat": "Measures in-memory MCP catalog delivery only; it does not measure model tokens, task accuracy, provider analysis, or end-to-end latency.",
+  "preserved": {
+    "sameToolNames": true,
+    "sameDescriptions": true,
+    "sameInputSchemas": true
+  },
+  "skillBytes": {
+    "core": 5087,
+    "fullGuideOnDemand": 54974
+  },
+  "results": [
+    {
+      "profile": "compact-full",
+      "tools": 229,
+      "outputSchemas": 229,
+      "catalogBytes": 3573527,
+      "toolsListPayloadBytes": 3562562,
+      "toolsListMedianMs": 19.71,
+      "measuredRounds": 10,
+      "warmups": 2
+    },
+    {
+      "profile": "compact-off",
+      "tools": 229,
+      "outputSchemas": 0,
+      "catalogBytes": 311919,
+      "toolsListPayloadBytes": 300954,
+      "toolsListMedianMs": 3.57,
+      "measuredRounds": 10,
+      "warmups": 2
+    }
+  ],
+  "reduction": {
+    "catalogBytesPercent": 91.3,
+    "toolsListPayloadBytesPercent": 91.6,
+    "toolsListMedianMsPercent": 81.9
+  }
+}

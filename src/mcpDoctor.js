@@ -350,7 +350,7 @@ const targetFreeEnvironment = (environment) => {
 const catalogIdentityForEnvironment = (environment) => {
     const inputProfile = parseMcpInputSchemaProfile(environment.PHXRE_MCP_INPUT_SCHEMA_PROFILE);
     const outputProfile = parseMcpOutputSchemaProfile(environment.PHXRE_MCP_OUTPUT_SCHEMA_PROFILE);
-    return createCatalogIdentity(compactPresentationForMcpInputSchemaProfile(inputProfile.ok ? inputProfile.value : undefined), outputProfile.ok ? (outputProfile.value ?? "full") : "full");
+    return createCatalogIdentity(compactPresentationForMcpInputSchemaProfile(inputProfile.ok ? inputProfile.value : undefined), outputProfile.ok ? (outputProfile.value ?? "off") : "off");
 };
 const captureStderr = () => {
     const retained = Buffer.allocUnsafe(MCP_STARTUP_POLICY.doctorStderrBytes);

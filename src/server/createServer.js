@@ -392,7 +392,7 @@ const outputSchemasOmitted = (environment) => {
     const configured = parseMcpOutputSchemaProfile(environment.PHXRE_MCP_OUTPUT_SCHEMA_PROFILE);
     if (!configured.ok)
         throw configured.error;
-    return configured.value === "off";
+    return configured.value !== "full";
 };
 const selectCompactInputSchemaPresentation = (environment) => {
     const configured = parseMcpInputSchemaProfile(environment.PHXRE_MCP_INPUT_SCHEMA_PROFILE);

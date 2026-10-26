@@ -889,7 +889,7 @@ const outputSchemasOmitted = (
     environment.PHXRE_MCP_OUTPUT_SCHEMA_PROFILE,
   );
   if (!configured.ok) throw configured.error;
-  return configured.value === "off";
+  return configured.value !== "full";
 };
 
 const selectCompactInputSchemaPresentation = (

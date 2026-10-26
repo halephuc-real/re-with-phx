@@ -46,7 +46,7 @@ export const runSessionStatus = async (
             compactPresentationForMcpInputSchemaProfile(
               config.value.mcpInputSchemaProfile,
             ),
-            config.value.mcpOutputSchemaProfile ?? "full",
+            config.value.mcpOutputSchemaProfile ?? "off",
           ),
         }),
       };

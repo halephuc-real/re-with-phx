@@ -95,14 +95,10 @@ export const run = async (
     dependencies.writeStderr(`${projectAnalysisError(config.error).message}\n`);
     return 1;
   }
-  const fullOutputCatalog =
-    environment.PHXRE_MCP_OUTPUT_SCHEMA_PROFILE === undefined ||
-    environment.PHXRE_MCP_OUTPUT_SCHEMA_PROFILE === "full";
   if (
     RECORDED_MCP_CATALOG_SHA256 !== undefined &&
     dependencies.transport !== "http" &&
     config.value.hopperTargetPath === undefined &&
-    fullOutputCatalog &&
     dependencies.createServer === undefined &&
     dependencies.loadOptionalProviders === undefined
   ) {

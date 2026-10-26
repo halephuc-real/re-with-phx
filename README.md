@@ -64,7 +64,6 @@ templates/patchers/
 - `elf_patcher.py` — ELF patching by virtual address, file offset, or pattern
 - `frida_hook_template.js` — runtime hook template
 
-
 The end-user workflow skill is located at:
 
 ```text
@@ -89,7 +88,16 @@ npm run artifacts:skills
 - The local MCP server name and tool namespace are `phxre`.
 - The `phxre` command alias is available through `npm link` or `npx` when the
   package is installed locally.
+- MCP advertises compact input schemas and omits output schemas by default to
+  reduce context. Canonical output validation and complete structured results
+  remain enabled. Set `PHXRE_MCP_OUTPUT_SCHEMA_PROFILE=full` for clients that
+  need output schemas in `tools/list`.
 - Native Windows build output is generated locally; see `native/windows/README.md`.
+
+Measure the local MCP catalog payload and `tools/list` latency with
+`npm run benchmark:mcp-context` after building. This is a transport microbenchmark,
+not an end-to-end model accuracy benchmark. The latest recorded run is in
+[`bench/results/mcp-context-2026-10-26.json`](bench/results/mcp-context-2026-10-26.json).
 
 ## License
 
