@@ -33,6 +33,11 @@ For a known feature seed, prefer `trace_application_feature`. For a function,
 use `analyze_function` before requesting procedure facets. Read only the
 provider guide that matches the observed target; see the [guide index](#guides).
 
+Choose the route from the question as well as the file type. Use the
+[intent recipes](references/intent-recipes.md) for feature tracing, function
+analysis, version comparison, and CLI fallback. Each recipe names the smallest
+useful first call and the evidence that should justify a follow-up.
+
 ## Keep the first pass cheap
 
 1. Identify target type and exact path or session. Reuse an open session and
@@ -65,6 +70,16 @@ output schemas. Both profiles keep the complete tool set.
   [connection and recovery](references/connection-and-recovery.md). Do not rerun
   unchanged work after a timeout or uncertain mutation.
 
+## If MCP is unavailable
+
+Use the installed `phxre` CLI directly when shell access is available; it uses
+the same local providers without MCP setup. Start with `phxre --help` or
+`phxre capabilities` if the installed version or provider support is unclear.
+The [intent recipes](references/intent-recipes.md#cli-fallback) give bounded
+commands for common questions. If neither MCP nor shell is available, state
+which required capability is unavailable and ask for the relevant output or
+artifact; do not imply that analysis ran.
+
 ## Guides
 
 - [Native formats, artifacts, Ghidra and analysis limits](references/native-and-artifacts.md)
@@ -72,6 +87,7 @@ output schemas. Both profiles keep the complete tool set.
 - [Runtime observation](references/runtime-observation.md)
 - [Android](references/android-applications.md)
 - [Evidence, investigations and reporting](references/evidence-workflows.md)
+- [Intent-based investigation recipes and CLI fallback](references/intent-recipes.md)
 - [Browser environments](references/environments.md)
 - [Connection and recovery](references/connection-and-recovery.md)
 - [Full routing matrix and advanced reconstruction, patching, Unity/Unreal,

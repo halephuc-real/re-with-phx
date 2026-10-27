@@ -1,0 +1,57 @@
+{
+  "task": {
+    "task_id": "replace-with-stable-id",
+    "category": "inventory | feature-trace | native-function | version-compare | protocol",
+    "target": {
+      "artifact_id": "replace-with-stable-id",
+      "sha256": "replace-with-pinned-sha256",
+      "fresh_copy_per_run": true
+    },
+    "prompt": "Use the identical user-facing question in every arm.",
+    "claims": [
+      {
+        "claim_id": "C1",
+        "required": true,
+        "accepted_values": ["reviewed answer or explicitly accepted variants"],
+        "minimum_evidence": ["artifact path plus symbol, offset, or Evidence ID"],
+        "known_unknowns": ["facts the artifact cannot establish"]
+      }
+    ],
+    "scoring": {
+      "factual_correctness": "0-2",
+      "evidence_traceability": "0-2",
+      "uncertainty_calibration": "0-2",
+      "coverage": "0-2",
+      "false_certainty": "none | present | reviewer-notes"
+    }
+  },
+  "run": {
+    "arm": "no-skill | phxre-skill-cli | phxre-skill-mcp | authorized-comparator",
+    "replicate": 1,
+    "model": "",
+    "model_settings": {},
+    "client_version": "",
+    "phxre_version": "",
+    "provider_versions": {},
+    "os_cpu": "",
+    "started_at": "",
+    "finished_at": "",
+    "turns": null,
+    "tool_calls": null,
+    "input_tokens": null,
+    "output_tokens": null,
+    "cost": null,
+    "wall_ms": null,
+    "setup_failure": null,
+    "transcript_path": "",
+    "raw_evidence_path": "",
+    "reviewer_scores": {
+      "factual_correctness": null,
+      "evidence_traceability": null,
+      "uncertainty_calibration": null,
+      "coverage": null,
+      "false_certainty": null,
+      "notes": ""
+    }
+  }
+}

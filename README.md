@@ -97,7 +97,10 @@ npm run artifacts:skills
 Measure the local MCP catalog payload and `tools/list` latency with
 `npm run benchmark:mcp-context` after building. This is a transport microbenchmark,
 not an end-to-end model accuracy benchmark. The latest recorded run is in
-[`bench/results/mcp-context-2026-10-26.json`](bench/results/mcp-context-2026-10-26.json).
+[`bench/results/mcp-context-2026-10-27.json`](bench/results/mcp-context-2026-10-27.json).
+The repeatable task-quality evaluation protocol and task template are in
+[`bench/task-eval/`](bench/task-eval/README.md); no task-quality score is claimed
+until pinned targets and reviewed answer keys are added.
 
 ## License
 
