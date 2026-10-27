@@ -55,7 +55,7 @@ for (const relativePath of paths) {
             "\n",
           ),
     check,
-    generateCommand: "npm run docs:generate",
+    generateCommand: "npm run artifacts:skills",
   });
 }
 if (
@@ -63,7 +63,7 @@ if (
   JSON.stringify(await filePaths(outputRoot)) !== JSON.stringify(paths)
 )
   throw new Error(
-    "Generated skill file inventory drifted; run npm run docs:generate",
+    "Generated skill file inventory drifted; run npm run artifacts:skills",
   );
 
 async function filePaths(directory, prefix = "") {

@@ -40,6 +40,19 @@ useful first call and the evidence that should justify a follow-up.
 
 ## Keep the first pass cheap
 
+For an unfamiliar local file, use the CLI-only intake command before selecting
+an engine:
+
+```sh
+phxre triage-artifact /absolute/path/to/file --json
+```
+
+It reads a bounded header sample, reports whether its SHA-256 covers the prefix
+or complete file, and proposes existing tools without executing the target.
+Validate the format with the selected parser. A suffix, signature match, or high
+sample entropy is not proof of the complete format, encryption, or packing.
+`triage-artifact` is not an MCP tool and does not create retained Evidence.
+
 1. Identify target type and exact path or session. Reuse an open session and
    matching Evidence; do not repeat an identical analysis.
 2. Use default output for small questions. For a large or uncertain inventory,

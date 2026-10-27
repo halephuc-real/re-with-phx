@@ -30,6 +30,30 @@ Run the MCP server directly:
 node scripts/phxre.mjs mcp
 ```
 
+Generate a target-free MCP configuration that points to this exact checkout:
+
+```bash
+npm run config:print
+```
+
+The output uses the current Node executable and an absolute path to
+`scripts/phxre.mjs`; it does not fetch another package or modify client config.
+
+## Artifact intake
+
+Use bounded, read-only content detection before choosing an analysis engine for
+an unfamiliar local file:
+
+```bash
+node scripts/phxre.mjs triage-artifact /absolute/path/to/file --json
+node scripts/phxre.mjs triage-artifact /absolute/path/to/file --hash full --max-bytes 268435456 --json
+```
+
+The command samples at most 64 KiB for format and entropy hints. Full hashing
+streams the file within the selected budget (64 MiB by default). It distinguishes
+a complete SHA-256 from a prefix digest, proposes tools from the current catalog,
+and does not execute the target. Parser validation is still required.
+
 OpenCode MCP configuration example:
 
 ```json
